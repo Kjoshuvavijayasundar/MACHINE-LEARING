@@ -1,0 +1,105 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.multioutput import MultiOutputClassifier
+from sklearn.metrics import roc_auc_score, roc_curve, auc
+
+# Step 1: Load the datasets
+train_features = pd.read_csv(r'gfg hackathon\dataset and all\training_set_features.csv')
+train_labels = pd.read_csv(r'gfg hackathon\dataset and all\training_set_labels.csv')
+test_features = pd.read_csv(r'gfg hackathon\dataset and all\test_set_features.csv')
+submission_format = pd.read_csv(r'gfg hackathon\dataset and all\submission_format.csv')
+
+# Step 2: Merge training features with labels
+train_data = train_features.merge(train_labels, on='respondent_id')
+
+# Step 3: Data Preprocessing
+# Separate features and target variables
+X = train_data.drop(columns=['respondent_id', 'xyz_vaccine', 'seasonal_vaccine'])
+y = train_data[['xyz_vaccine', 'seasonal_vaccine']]
+
+# Identify categorical and numerical columns
+categorical_cols = X.select_dtypes(include=['object']).columns
+numerical_cols = X.select_dtypes(exclude=['object']).columns
+
+# Preprocessing for numerical data
+numerical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='median')),
+    ('scaler', StandardScaler())])
+
+# Preprocessing for categorical data
+categorical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))])
+
+# Combine preprocessors
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', numerical_transformer, numerical_cols),
+        ('cat', categorical_transformer, categorical_cols)])
+
+# Step 4: Train-Test Split
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Step 5: Model Selection
+model = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', MultiOutputClassifier(RandomForestClassifier(random_state=42)))])
+
+# Train the model
+model.fit(X_train, y_train)
+
+# Step 6: Prediction on validation set for evaluation
+y_val_pred_proba = model.predict_proba(X_val)
+
+# Extract the predicted probabilities
+xyz_vaccine_proba_val = y_val_pred_proba[0][:, 1]
+seasonal_vaccine_proba_val = y_val_pred_proba[1][:, 1]
+
+# Step 6: Evaluation
+roc_auc_xyz_val = roc_auc_score(y_val['xyz_vaccine'], xyz_vaccine_proba_val)
+roc_auc_seasonal_val = roc_auc_score(y_val['seasonal_vaccine'], seasonal_vaccine_proba_val)
+mean_roc_auc_val = (roc_auc_xyz_val + roc_auc_seasonal_val) / 2
+
+print(f'ROC AUC for xyz_vaccine: {roc_auc_xyz_val}')
+print(f'ROC AUC for seasonal_vaccine: {roc_auc_seasonal_val}')
+print(f'Mean ROC AUC: {mean_roc_auc_val}')
+
+# Plot ROC-AUC Curves
+fpr_xyz, tpr_xyz, _ = roc_curve(y_val['xyz_vaccine'], xyz_vaccine_proba_val)
+fpr_seasonal, tpr_seasonal, _ = roc_curve(y_val['seasonal_vaccine'], seasonal_vaccine_proba_val)
+
+roc_auc_xyz = auc(fpr_xyz, tpr_xyz)
+roc_auc_seasonal = auc(fpr_seasonal, tpr_seasonal)
+
+plt.figure()
+plt.plot(fpr_xyz, tpr_xyz, color='blue', lw=2, label=f'ROC curve for xyz_vaccine (area = {roc_auc_xyz:.2f})')
+plt.plot(fpr_seasonal, tpr_seasonal, color='red', lw=2, label=f'ROC curve for seasonal_vaccine (area = {roc_auc_seasonal:.2f})')
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic (ROC) Curves')
+plt.legend(loc='lower right')
+plt.show()
+
+# Step 7: Prediction on test set
+test_pred_proba = model.predict_proba(test_features.drop(columns=['respondent_id']))
+test_xyz_vaccine_proba = test_pred_proba[0][:, 1]
+test_seasonal_vaccine_proba = test_pred_proba[1][:, 1]
+
+# Prepare submission
+submission = pd.DataFrame({
+    'respondent_id': test_features['respondent_id'],
+    'xyz_vaccine': test_xyz_vaccine_proba,
+    'seasonal_vaccine': test_seasonal_vaccine_proba
+})
+
+submission.to_csv('submission.csv', index=False)
